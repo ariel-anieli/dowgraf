@@ -64,8 +64,9 @@ def get_image(db_uid, panel, start, stop, args):
         [(start, stop)],
         lambda _time : {'rsp' : get_data_in_time_range(_time[0], _time[1])},
         lambda _: _.update(cnt = _['rsp'].content) or _,
+        lambda _: _.update(tpe = _['rsp'].headers['Content-Type'].split('/')[-1]) or _,
         lambda _: _.update(nme = re.sub('.DUT', args['prfx'], panel['title'])) or _,
-        lambda _: _.update(fle = open(args['fold'] + '/' + _['nme'], 'wb')) or _,
+        lambda _: _.update(fle = open(args['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
         lambda _: _['fle'].write(_['cnt']) and _['fle'].close(),
     )
 
