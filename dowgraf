@@ -22,7 +22,7 @@ parser.add_argument('-of',  '--output-folder', default='/tmp/dowgraf')
 parser.add_argument('-op',  '--output-prefix', default='DUT')
 parser.add_argument('-t', '--time-interval')
 parser.add_argument('-tr',  '--time-range')
-parser.add_argument('-dn',  '--device-name')
+parser.add_argument('-vr',  '--variables')
 group  = parser.add_mutually_exclusive_group(required=True)
 group.add_argument('-sd',  '--search-dashboard')
 group.add_argument('-sp',  '--search-panels')
@@ -38,17 +38,27 @@ def fold_if_true_and_apply(args, *funcs, _if=lambda pred: pred):
         arg) for arg in args if _if(arg)]
 
 def get_image(db_uid, panel, start, stop, args):
+
+    param = {
+        'panelId' : panel['id'],
+        'from'    : start if start<stop else stop,
+        'to'      : stop  if start<stop else start,
+        'width'   : 1000,
+        'height'  : 500,
+        'tz'      : 'Europe/Paris'
+    }
+
+    if args['vars']:
+        param.update({
+            'var-{}'.format(el[0]) : el[1]
+            for item in args
+            for el in item.split(':')
+        })
+    
     get_data_in_time_range = lambda start, stop: requests.get(
         '/'.join([base, 'render/d-solo', db_uid]),
         headers = head,
-        params = {'panelId' : panel['id'],
-                  'from'    : start if start<stop else stop,
-                  'to'      : stop  if start<stop else start,
-                  'width'   : 1000,
-                  'height'  : 500,
-                  'var-DUT' : args['dname'],
-                  'tz'      : 'Europe/Paris'
-        })
+        params = param)
 
     fold_if_true_and_apply(
         [(start, stop)],
@@ -85,10 +95,12 @@ if __name__ =="__main__":
             else 'range' if args.time_range \
             else None
 
-	    ARGS = {'type'  : TYPE,
-                'fold'  : args.output_folder,
-                'dname' : args.device_name,
-                'prfx'  : args.output_prefix}
+        ARGS = {
+            'type' : TYPE,
+            'fold' : args.output_folder,
+            'vars' : args.variables.split(','),
+            'prfx' : args.output_prefix
+        }
 
         def get_time_timespan_and_tell_if_add_or_sub(_time):
             if re.match('^\d.*P', _time):
