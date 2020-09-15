@@ -49,12 +49,13 @@ def get_image(db_uid, panel, start, stop, args):
     }
 
     if args['vars']:
-        param.update({
-            'var-{}'.format(el[0]) : el[1]
-            for item in args
-            for el in item.split(':')
-        })
-    
+        for var in args['vars']:
+            item = var.split(':')
+            key  = 'var-{}'.format(item[0])
+            val  = item[1]
+
+            param[key] = val
+
     get_data_in_time_range = lambda start, stop: requests.get(
         '/'.join([base, 'render/d-solo', db_uid]),
         headers = head,
@@ -175,7 +176,7 @@ if __name__ =="__main__":
                     lambda _: _.update(date  = get_time(_['date']))                          or _,
                     lambda _: _.update(shift = shift_time(_['date'], _['span'], _['op']))    or _,
                     lambda _: _.update(start = _['date'].timestamp())                        or _,
-                    lambda _: _.update(start = 1000 * _['start'], shift = 1000 * _['shift']) or _,
+                    lambda _: _.update(start = _['start'], shift = _['shift']) or _,
                     lambda _: [get_image(db_uid, panel, _['start'], _['shift'], args) for panel in panels]
                 )
 
