@@ -17,7 +17,7 @@ logging.basicConfig(stream=sys.stdout, format='%(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-u', '--user-credentials', required=True)
-parser.add_argument('-H', '--host',             required=True)
+parser.add_argument('-H', '--host',             required=False)
 parser.add_argument('-of',  '--output-folder', default='/tmp/dowgraf')
 parser.add_argument('-op',  '--output-prefix', default='DUT')
 parser.add_argument('-t', '--time-interval')
@@ -26,6 +26,7 @@ parser.add_argument('-vr',  '--variables')
 group  = parser.add_mutually_exclusive_group(required=True)
 group.add_argument('-sd',  '--search-dashboard')
 group.add_argument('-sp',  '--search-panels')
+group.add_argument('-U',  '--url')
 
 args = parser.parse_args()
 base = 'http://{}@{}'.format(args.user_credentials, args.host)
@@ -57,7 +58,7 @@ def get_image(db_uid, panel, start, stop, args):
             param[key] = val
 
     get_data_in_time_range = lambda start, stop: requests.get(
-        '/'.join([base, 'render/d-solo', db_uid]),
+        '/'.join([args['base'], 'render/d-solo', db_uid]),
         headers = head,
         params = param)
 
@@ -86,8 +87,50 @@ if __name__ =="__main__":
             lambda rsp: json.loads(rsp.text),
             json.dumps,
             logging.info)
+        
+    elif args.url:
+        ARGS = {
+            'fold' : args.output_folder,
+            'prfx' : args.output_prefix
+        }
 
-    if args.search_panels and (args.time_interval or args.time_range):
+        url_with_creds_and_db_uid = functools.reduce(
+            lambda _str, ptr: re.sub(ptr[0], ptr[1], _str),
+            [
+                ('(?<=//)', args.user_credentials + '@'),
+                ('\?.*$', ''),
+                ('/[^/]+$', ''),
+                ('(?<=/)d(?=/)', 'api/dashboards/uid'),
+            ],
+            args.url
+        )
+
+        base_name_with_creds = re.sub('/api.*', '', url_with_creds_and_db_uid)
+
+        vars = [':'.join(elem)
+                for elem in [var.split('=')
+                for var in re.findall('(?<=&|\?)[^&]+(?=&|$)',
+                                      re.sub('var-', '', args.url))
+                ]]
+
+        ARGS.update(vars=[val for val in vars if val.split(':')[0] not in ['from', 'to', 'orgId']])
+        ARGS.update(base=base_name_with_creds)
+        
+        db_uid = re.search('(?<=/d/)[^/]+(?=/)', args.url) \
+            and re.search('(?<=/d/)[^/]+(?=/)', args.url).group(0)
+        VARS   = {elem[0] : elem[1] for elem in [item.split(':') for item in vars]}
+
+        fold_if_true_and_apply(
+            [url_with_creds_and_db_uid],
+            lambda url:  requests.get(url, headers=head),
+            lambda rsp:  json.loads(rsp.text),
+            lambda obj:  obj['dashboard']['panels'],
+            lambda seq:  [{'id':pnl['id'], 'title':pnl['title']} for pnl in seq],
+            lambda pnls: os.mkdir(ARGS['fold']) or pnls,
+            lambda pnls: [get_image(db_uid, panel, VARS['from'], VARS['to'], ARGS) for panel in pnls]
+        )
+
+    elif args.search_panels and (args.time_interval or args.time_range):
 
         TIME = args.time_interval if args.time_interval \
             else args.time_range if args.time_range \
@@ -101,7 +144,8 @@ if __name__ =="__main__":
             'type' : TYPE,
             'fold' : args.output_folder,
             'vars' : args.variables.split(','),
-            'prfx' : args.output_prefix
+            'prfx' : args.output_prefix,
+            'base' : base
         }
 
         def get_time_timespan_and_tell_if_add_or_sub(_time):
