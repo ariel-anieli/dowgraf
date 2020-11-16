@@ -1,8 +1,7 @@
-#!/usr/bin/python
-
 import argparse
 import datetime
 import functools
+import itertools
 import json
 import logging
 import operator
@@ -49,18 +48,19 @@ def get_image(db_uid, panel, start, stop, args):
         'tz'      : 'Europe/Paris'
     }
 
-    if args['vars']:
-        for var in args['vars']:
-            item = var.split(':')
-            key  = 'var-{}'.format(item[0])
-            val  = item[1]
+    qry = '/'.join([args['base'], 'render/d-solo', db_uid])
+    prm = [
+        ('var-' + key,value)
+        for key,values in args['vars'].items()
+        for value in values
+    ]
 
-            param[key] = val
+    [prm.append((key, value)) for key,value in param.items()]
 
     get_data_in_time_range = lambda start, stop: requests.get(
-        '/'.join([args['base'], 'render/d-solo', db_uid]),
+        qry,
         headers = head,
-        params = param)
+        params = prm)
 
     fold_if_true_and_apply(
         [(start, stop)],
@@ -113,21 +113,41 @@ if __name__ =="__main__":
                                       re.sub('var-', '', args.url))
                 ]]
 
-        ARGS.update(vars=[val for val in vars if val.split(':')[0] not in ['from', 'to', 'orgId']])
+        ARGS.update(vars=[val for val in vars
+                          if val.split(':')[0] not in ['from',
+                                                       'to',
+                                                       'orgId']])
         ARGS.update(base=base_name_with_creds)
         
         db_uid = re.search('(?<=/d/)[^/]+(?=/)', args.url) \
             and re.search('(?<=/d/)[^/]+(?=/)', args.url).group(0)
-        VARS   = {elem[0] : elem[1] for elem in [item.split(':') for item in vars]}
+
+        VARS   = {
+            elem[0] : elem[1]
+            for elem in [item.split(':')
+            for item in vars]
+        }
+
+        ARGS.update(
+            vars={
+                k : [elem.split(':')[1] for elem in list(v)]
+                for k,v in itertools.groupby(
+                        ARGS['vars'],
+                        key=lambda elem: elem.split(':')[0]
+                )
+            }
+        )
 
         fold_if_true_and_apply(
             [url_with_creds_and_db_uid],
             lambda url:  requests.get(url, headers=head),
             lambda rsp:  json.loads(rsp.text),
             lambda obj:  obj['dashboard']['panels'],
-            lambda seq:  [{'id':pnl['id'], 'title':pnl['title']} for pnl in seq],
+            lambda seq:  [{'id':pnl['id'], 'title':pnl['title']}
+                          for pnl in seq],
             lambda pnls: os.mkdir(ARGS['fold']) or pnls,
-            lambda pnls: [get_image(db_uid, panel, VARS['from'], VARS['to'], ARGS) for panel in pnls]
+            lambda pnls: [get_image(db_uid, panel, VARS['from'], VARS['to'], ARGS)
+                          for panel in pnls]
         )
 
     elif args.search_panels and (args.time_interval or args.time_range):
