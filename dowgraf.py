@@ -37,38 +37,35 @@ def fold_if_true_and_apply(args, *funcs, _if=lambda pred: pred):
         funcs,
         arg) for arg in args if _if(arg)]
 
-def get_image(db_uid, panel, start, stop, args):
+def get_image(panel, arg):
 
-    param = {
+    base_parameters = {
         'panelId' : panel['id'],
-        'from'    : start if start<stop else stop,
-        'to'      : stop  if start<stop else start,
         'width'   : 1000,
         'height'  : 500,
         'tz'      : 'Europe/Paris'
     }
-
-    qry = '/'.join([args['base'], 'render/d-solo', db_uid])
-    prm = [
-        ('var-' + key,value)
-        for key,values in args['vars'].items()
-        for value in values
+    
+    parameters = [parameter for parameter in itertools.chain(
+        arg['parameters'],
+        base_parameters.items())
     ]
 
-    [prm.append((key, value)) for key,value in param.items()]
+    qry = '/'.join([arg['base'], 'render/d-solo', arg['uid']])
 
-    get_data_in_time_range = lambda start, stop: requests.get(
+    get_data_in_time_range = lambda url_params: requests.get(
         qry,
         headers = head,
-        params = prm)
+        params  = url_params
+    )
 
     fold_if_true_and_apply(
-        [(start, stop)],
-        lambda _time : {'rsp' : get_data_in_time_range(_time[0], _time[1])},
+        [parameters],
+        lambda params : {'rsp' : get_data_in_time_range(params)},
         lambda _: _.update(cnt = _['rsp'].content) or _,
         lambda _: _.update(tpe = _['rsp'].headers['Content-Type'].split('/')[-1]) or _,
-        lambda _: _.update(nme = re.sub('.DUT', args['prfx'], panel['title'])) or _,
-        lambda _: _.update(fle = open(args['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
+        lambda _: _.update(nme = re.sub('.DUT', arg['prfx'], panel['title'])) or _,
+        lambda _: _.update(fle = open(arg['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
         lambda _: _['fle'].write(_['cnt']) and _['fle'].close(),
     )
 
@@ -87,73 +84,42 @@ if __name__ =="__main__":
             lambda rsp: json.loads(rsp.text),
             json.dumps,
             logging.info)
-        
+
     elif args.url:
-        ARGS = {
+        arguments = {
             'fold' : args.output_folder,
             'prfx' : args.output_prefix
         }
 
         url_with_creds_and_db_uid = functools.reduce(
-            lambda _str, ptr: re.sub(ptr[0], ptr[1], _str),
-            [
-                ('(?<=//)', args.user_credentials + '@'),
-                ('\?.*$', ''),
-                ('/[^/]+$', ''),
-                ('(?<=/)d(?=/)', 'api/dashboards/uid'),
-            ],
+            lambda string, pattern: re.sub(pattern[0], pattern[1], string),
+            [('(?<=//)'      , args.user_credentials + '@'),
+             ('\?.*$'        , ''),
+             ('/[^/]+$'      , ''),
+             ('(?<=/)d(?=/)' , 'api/dashboards/uid')],
             args.url
         )
 
-        base_name_with_creds = re.sub('/api.*', '', url_with_creds_and_db_uid)
-
-        vars = [':'.join(elem)
-                for elem in [var.split('=')
-                for var in re.findall('(?<=&|\?)[^&]+(?=&|$)',
-                                      re.sub('var-', '', args.url))
-                ]]
-
-        ARGS.update(vars=[val for val in vars
-                          if val.split(':')[0] not in ['from',
-                                                       'to',
-                                                       'orgId']])
-        ARGS.update(base=base_name_with_creds)
-        
-        db_uid = re.search('(?<=/d/)[^/]+(?=/)', args.url) \
-            and re.search('(?<=/d/)[^/]+(?=/)', args.url).group(0)
-
-        VARS   = {
-            elem[0] : elem[1]
-            for elem in [item.split(':')
-            for item in vars]
-        }
-
-        ARGS.update(
-            vars={
-                k : [elem.split(':')[1] for elem in list(v)]
-                for k,v in itertools.groupby(
-                        ARGS['vars'],
-                        key=lambda elem: elem.split(':')[0]
-                )
-            }
+        arguments.update(
+            base       = re.sub('/api.*', '', url_with_creds_and_db_uid),
+            parameters = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', args.url),
+            uid        = re.findall('(?<=/d/)[^/]+(?=/)', args.url).pop()
         )
 
         fold_if_true_and_apply(
             [url_with_creds_and_db_uid],
-            lambda url:  requests.get(url, headers=head),
-            lambda rsp:  json.loads(rsp.text),
-            lambda obj:  obj['dashboard']['panels'],
-            lambda seq:  [{'id':pnl['id'], 'title':pnl['title']}
-                          for pnl in seq],
-            lambda pnls: os.mkdir(ARGS['fold']) or pnls,
-            lambda pnls: [get_image(db_uid, panel, VARS['from'], VARS['to'], ARGS)
-                          for panel in pnls]
+            lambda url    : requests.get(url, headers=head),
+            lambda rsp    : json.loads(rsp.text),
+            lambda obj    : obj['dashboard']['panels'],
+            lambda seq    : [{'id':pnl['id'], 'title':pnl['title']} for pnl in seq],
+            lambda panels : os.mkdir(arguments['fold']) or panels,
+            lambda panels : [get_image(panel, arguments) for panel in panels]
         )
 
     elif args.search_panels and (args.time_interval or args.time_range):
 
         TIME = args.time_interval if args.time_interval \
-            else args.time_range if args.time_range \
+            else args.time_range if argsOA.time_range \
             else None
 
         TYPE = 'itvl' if args.time_interval \
