@@ -119,7 +119,7 @@ if __name__ =="__main__":
     elif args.search_panels and (args.time_interval or args.time_range):
 
         TIME = args.time_interval if args.time_interval \
-            else args.time_range if argsOA.time_range \
+            else args.time_range if args.time_range \
             else None
 
         TYPE = 'itvl' if args.time_interval \
