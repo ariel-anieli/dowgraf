@@ -45,7 +45,7 @@ def get_image(panel, arg):
         'height'  : 500,
         'tz'      : 'Europe/Paris'
     }
-    
+
     parameters = [parameter for parameter in itertools.chain(
         arg['parameters'],
         base_parameters.items())
@@ -68,6 +68,18 @@ def get_image(panel, arg):
         lambda _: _.update(fle = open(arg['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
         lambda _: _['fle'].write(_['cnt']) and _['fle'].close(),
     )
+
+def find_ids_and_titles(found, panel):
+    if panel['type']=='row' and panel['panels']:
+        [found.append({'id'    : entry['id'],
+                       'title' : entry['title'],
+        }) for entry in panel['panels']]
+    elif panel['type']!='row':
+        found.append({'id'    : panel['id'],
+                      'title' : panel['title'],
+        })
+
+    return found
 
 if __name__ =="__main__":
 
@@ -111,7 +123,7 @@ if __name__ =="__main__":
             lambda url    : requests.get(url, headers=head),
             lambda rsp    : json.loads(rsp.text),
             lambda obj    : obj['dashboard']['panels'],
-            lambda seq    : [{'id':pnl['id'], 'title':pnl['title']} for pnl in seq],
+            lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
             lambda panels : os.mkdir(arguments['fold']) or panels,
             lambda panels : [get_image(panel, arguments) for panel in panels]
         )
