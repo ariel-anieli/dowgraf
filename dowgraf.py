@@ -31,11 +31,21 @@ args = parser.parse_args()
 base = 'http://{}@{}'.format(args.user_credentials, args.host)
 head = {'Content-Type' : 'application/json'}
 
-def fold_if_true_and_apply(args, *funcs, _if=lambda pred: pred):
-    return [functools.reduce(
-        lambda _in, func: func(_in),
-        funcs,
-        arg) for arg in args if _if(arg)]
+def mapping(tr):
+    return lambda red: lambda acc,res: red(acc,tr(res))
+
+def filtering(prd):
+    return lambda red: lambda acc,res: red(acc,res) if prd(res) else acc
+
+def comp(*funcs):
+    head, *tail = reversed(funcs)
+    return lambda *args,**kwargs: functools.reduce(lambda res, fn: fn(res),
+                                                   tail,
+                                                   head(*args,**kwargs))
+
+def append_to_acc(acc,res):
+    acc.append(res)
+    return acc
 
 def get_image(panel, arg):
 
@@ -85,17 +95,34 @@ if __name__ =="__main__":
 
     if args.search_dashboard:
 
-        srch_db = lambda qry: requests.get(
-            base + '/api/search',
-            headers = head,
-            params = {'query': qry})
+        @mapping
+        def search_into_db_with_keyword(qry):
+            return {
+                'qry' : qry,
+                'rsp' : requests.get(
+                    base + '/api/search',
+                    headers = head,
+                    params = {'query': qry})
+            }
 
-        fold_if_true_and_apply(
-            [args.search_dashboard],
-            srch_db,
-            lambda rsp: json.loads(rsp.text),
-            json.dumps,
-            logging.info)
+        @mapping
+        def extract_db_from_rsp(rsp):
+            return {
+                'qry' : rsp['qry'],
+                'db'  : json.loads(rsp['rsp'].text)
+            }
+
+        dashboards = functools.reduce(
+            comp(
+                search_into_db_with_keyword,
+                filtering(lambda rsp: rsp['rsp'].ok),
+                extract_db_from_rsp
+            )(append_to_acc),
+            args.search_dashboard.split(','),
+            []
+        )
+
+        logging.info(json.dumps(dashboards))
 
     elif args.url:
         arguments = {
