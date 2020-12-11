@@ -43,9 +43,16 @@ def comp(*funcs):
                                                    tail,
                                                    head(*args,**kwargs))
 
-def append_to_acc(acc,res):
-    acc.append(res)
-    return acc
+def append_to_acc_then_print_all(acc,res):
+    acc['results'].append(res)
+
+    if acc['total']!=res['id']:
+        return acc
+    else:
+        comp(
+            logging.info,
+            json.dumps
+        )(acc)
 
 def get_image(panel, arg):
 
@@ -97,32 +104,37 @@ if __name__ =="__main__":
 
         @mapping
         def search_into_db_with_keyword(qry):
+            _id, key = qry
+
             return {
-                'qry' : qry,
+                'key' : key,
+                'id'  : _id,
                 'rsp' : requests.get(
                     base + '/api/search',
                     headers = head,
-                    params = {'query': qry})
+                    params = {'query': key})
             }
 
         @mapping
         def extract_db_from_rsp(rsp):
             return {
-                'qry' : rsp['qry'],
-                'db'  : json.loads(rsp['rsp'].text)
+                'key' : rsp['key'],
+                'id'  : rsp['id'],
+                'db'  : json.loads(rsp['rsp'].text),
             }
 
-        dashboards = functools.reduce(
+        functools.reduce(
             comp(
                 search_into_db_with_keyword,
                 filtering(lambda rsp: rsp['rsp'].ok),
                 extract_db_from_rsp
-            )(append_to_acc),
-            args.search_dashboard.split(','),
-            []
+            )(append_to_acc_then_print_all),
+            enumerate(args.search_dashboard.split(','), start=1),
+            {
+                'total'   : len(args.search_dashboard.split(',')),
+                'results' : []
+            }
         )
-
-        logging.info(json.dumps(dashboards))
 
     elif args.url:
         arguments = {
