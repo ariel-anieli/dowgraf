@@ -4,6 +4,7 @@ import functools
 import itertools
 import json
 import logging
+import multiprocessing
 import operator
 import os
 import random
@@ -37,22 +38,14 @@ def mapping(tr):
 def filtering(prd):
     return lambda red: lambda acc,res: red(acc,res) if prd(res) else acc
 
+def pipe(args, *funcs):
+    return functools.reduce(lambda arg, fn: fn(arg), funcs, args)
+
 def comp(*funcs):
     head, *tail = reversed(funcs)
     return lambda *args,**kwargs: functools.reduce(lambda res, fn: fn(res),
                                                    tail,
                                                    head(*args,**kwargs))
-
-def append_to_acc_then_print_all(acc,res):
-    acc['results'].append(res)
-
-    if acc['total']!=res['id']:
-        return acc
-    else:
-        comp(
-            logging.info,
-            json.dumps
-        )(acc)
 
 def get_image(panel, arg):
 
@@ -98,74 +91,128 @@ def find_ids_and_titles(found, panel):
 
     return found
 
+@mapping
+def search_into_db_with_keyword(key):
+    return {
+        'key' : key,
+        'rsp' : requests.get(
+            base + '/api/search',
+            headers = head,
+            params = {'query': key})
+    }
+
+@mapping
+def extract_db_from_rsp(rsp):
+    return {
+        'key' : rsp['key'],
+        'db'  : json.loads(rsp['rsp'].text),
+    }
+
+def append_to_acc(acc,res):
+    acc.put(res)
+
 if __name__ =="__main__":
 
     if args.search_dashboard:
 
-        @mapping
-        def search_into_db_with_keyword(qry):
-            _id, key = qry
+        def qry_dashboard_with_key(arg):
+            functools.reduce(
+                comp(
+                    search_into_db_with_keyword,
+                    filtering(lambda rsp: rsp['rsp'].ok),
+                    extract_db_from_rsp
+                )(append_to_acc),
+                [arg['key']],
+                arg['queue']
+            )
 
-            return {
-                'key' : key,
-                'id'  : _id,
-                'rsp' : requests.get(
-                    base + '/api/search',
-                    headers = head,
-                    params = {'query': key})
-            }
+        def start_worker(arg):
+            return multiprocessing.Process(
+                target = qry_dashboard_with_key,
+                args  =  (arg,)
+            )
+
+        def run_worker(proc):
+            proc.start()
+            return proc
+
+        def join_worker(proc):
+            proc.join()
+            return proc
+
+        def aggregate_results(acc,res):
+            acc['results'].append(res)
+            acc['total']  = acc['total'] + 1
+            return acc
+
+        with multiprocessing.Manager() as mgr:
+            results = mgr.Queue()
+
+            pipe(
+                args.search_dashboard.split(','),
+                lambda keys  : [{'key':key,'queue':results} for key in keys],
+                lambda args  : [start_worker(arg) for arg in args],
+                lambda procs : [run_worker(proc)  for proc in procs],
+                lambda procs : [join_worker(proc) for proc in procs]
+            )
+
+            results.put(None)
+
+            pipe(
+                iter(results.get, None),
+                lambda res: functools.reduce(aggregate_results,res,
+                                             {'total':0,'results':[]}),
+                json.dumps,
+                logging.info
+            )            
+
+    elif args.url:
 
         @mapping
-        def extract_db_from_rsp(rsp):
-            return {
-                'key' : rsp['key'],
-                'id'  : rsp['id'],
-                'db'  : json.loads(rsp['rsp'].text),
-            }
+        def bld_url_with_creds_and_db_uid(args):
+            (url, arg) = args
+
+            arg['url-with-creds-and-uid'] = functools.reduce(
+                lambda string, pattern: re.sub(pattern[0], pattern[1], string),
+                [('(?<=//)'      , arg['cred'] + '@'),
+                 ('\?.*$'        , ''),
+                 ('/[^/]+$'      , ''),
+                 ('(?<=/)d(?=/)' , 'api/dashboards/uid')],
+                url
+            )
+
+            arg['base']       = re.sub('/api.*', '', arg['url-with-creds-and-uid']),
+            arg['parameters'] = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', url),
+            arg['uid']        = re.findall('(?<=/d/)[^/]+(?=/)', url).pop()
+
+            return arg
+
+        arguments = {
+            'fold' : args.output_folder,
+            'prfx' : args.output_prefix,
+            'cred' : args.user_credentials
+        }
+
+        urls = args.url.split()
 
         functools.reduce(
             comp(
-                search_into_db_with_keyword,
-                filtering(lambda rsp: rsp['rsp'].ok),
-                extract_db_from_rsp
-            )(append_to_acc_then_print_all),
-            enumerate(args.search_dashboard.split(','), start=1),
-            {
-                'total'   : len(args.search_dashboard.split(',')),
-                'results' : []
-            }
+                bld_url_with_creds_and_db_uid,
+                mapping(logging.info),
+            )(lambda acc,res: acc),
+            zip(urls,itertools.repeat(arguments)),
+            []
         )
 
-    elif args.url:
-        arguments = {
-            'fold' : args.output_folder,
-            'prfx' : args.output_prefix
-        }
-
-        url_with_creds_and_db_uid = functools.reduce(
-            lambda string, pattern: re.sub(pattern[0], pattern[1], string),
-            [('(?<=//)'      , args.user_credentials + '@'),
-             ('\?.*$'        , ''),
-             ('/[^/]+$'      , ''),
-             ('(?<=/)d(?=/)' , 'api/dashboards/uid')],
-            args.url
-        )
-
-        arguments.update(
-            base       = re.sub('/api.*', '', url_with_creds_and_db_uid),
-            parameters = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', args.url),
-            uid        = re.findall('(?<=/d/)[^/]+(?=/)', args.url).pop()
-        )
-
-        fold_if_true_and_apply(
-            [url_with_creds_and_db_uid],
-            lambda url    : requests.get(url, headers=head),
-            lambda rsp    : json.loads(rsp.text),
-            lambda obj    : obj['dashboard']['panels'],
-            lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
-            lambda panels : os.mkdir(arguments['fold']) or panels,
-            lambda panels : [get_image(panel, arguments) for panel in panels]
-        )
+        # fold_if_true_and_apply(
+        #     [url_with_creds_and_db_uid],
+        #     lambda url    : requests.get(url, headers=head),
+        #     lambda rsp    : json.loads(rsp.text),
+        #     lambda obj    : obj['dashboard']['panels'],
+        #     lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
+        #     lambda panels : os.mkdir(arguments['fold']) or panels,
+        #     lambda panels : [get_image(panel, arguments) for panel in panels]
+        # )
 
     elif args.search_panels and (args.time_interval or args.time_range):
 
