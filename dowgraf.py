@@ -47,10 +47,10 @@ def comp(*funcs):
                                                    tail,
                                                    head(*args,**kwargs))
 
-def get_image(panel, arg):
+def get_image(arg):
 
     base_parameters = {
-        'panelId' : panel['id'],
+        'panelId' : arg['panel']['id'],
         'width'   : 1000,
         'height'  : 500,
         'tz'      : 'Europe/Paris'
@@ -69,12 +69,12 @@ def get_image(panel, arg):
         params  = url_params
     )
 
-    fold_if_true_and_apply(
-        [parameters],
+    pipe(
+        parameters,
         lambda params : {'rsp' : get_data_in_time_range(params)},
         lambda _: _.update(cnt = _['rsp'].content) or _,
         lambda _: _.update(tpe = _['rsp'].headers['Content-Type'].split('/')[-1]) or _,
-        lambda _: _.update(nme = re.sub('.DUT', arg['prfx'], panel['title'])) or _,
+        lambda _: _.update(nme = re.sub('.DUT', arg['prfx'], arg['panel']['title'])) or _,
         lambda _: _.update(fle = open(arg['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
         lambda _: _['fle'].write(_['cnt']) and _['fle'].close(),
     )
@@ -111,6 +111,31 @@ def extract_db_from_rsp(rsp):
 def append_to_acc(acc,res):
     acc.put(res)
 
+def exec_proc_with_args(args):
+    def start_worker(arg):
+        return multiprocessing.Process(
+            target = args['func'],
+            args   = (arg,)
+        )
+
+    def run_worker(proc):
+        proc.start()
+        return proc
+
+    def join_worker(proc):
+        proc.join()
+        return proc
+
+    pipe(
+        args['args'],
+        lambda entries : [start_worker(entry) for entry in entries],
+        lambda procs   : [run_worker(proc)  for proc in procs],
+        lambda procs   : [join_worker(proc) for proc in procs]
+    )
+
+    if 'queue' in args:
+        args['queue'].put(None)
+
 if __name__ =="__main__":
 
     if args.search_dashboard:
@@ -126,44 +151,26 @@ if __name__ =="__main__":
                 arg['queue']
             )
 
-        def start_worker(arg):
-            return multiprocessing.Process(
-                target = qry_dashboard_with_key,
-                args  =  (arg,)
-            )
-
-        def run_worker(proc):
-            proc.start()
-            return proc
-
-        def join_worker(proc):
-            proc.join()
-            return proc
-
         def aggregate_results(acc,res):
             (rlt, count) = res
             acc['results'].append(rlt)
             acc['total']  = count
             return acc
 
-        with multiprocessing.Manager() as mgr:
-            results = mgr.Queue()
+        with multiprocessing.Manager():
+            results = multiprocessing.Manager().Queue()
+            init    = {'total':0,'results':[]}
+
+            exec_proc_with_args({
+                'func'  : qry_dashboard_with_key,
+                'queue' : results,
+                'args'  : [{'key':key,'queue':results}
+                           for key in args.search_dashboard.split(',')]
+            })
 
             pipe(
-                args.search_dashboard.split(','),
-                lambda keys  : [{'key':key,'queue':results} for key in keys],
-                lambda args  : [start_worker(arg) for arg in args],
-                lambda procs : [run_worker(proc)  for proc in procs],
-                lambda procs : [join_worker(proc) for proc in procs]
-            )
-
-            results.put(None)
-
-            pipe(
-                iter(results.get, None),
-                lambda res: functools.reduce(aggregate_results,
-                                             zip(res,itertools.count(1)),
-                                             {'total':0,'results':[]}),
+                zip(iter(results.get, None),itertools.count(1)),
+                lambda res: functools.reduce(aggregate_results, res, init),
                 json.dumps,
                 logging.info
             )            
@@ -183,38 +190,66 @@ if __name__ =="__main__":
                 url
             )
 
-            arg['base']       = re.sub('/api.*', '', arg['url-with-creds-and-uid']),
-            arg['parameters'] = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', url),
+            arg['base']       = re.sub('/api.*', '', arg['url-with-creds-and-uid'])
+            arg['parameters'] = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', url)
             arg['uid']        = re.findall('(?<=/d/)[^/]+(?=/)', url).pop()
 
             return arg
 
-        arguments = {
-            'fold' : args.output_folder,
-            'prfx' : args.output_prefix,
-            'cred' : args.user_credentials
-        }
+        @mapping
+        def retrieve_ids_and_titles_of_panels(arg):
+            return pipe(
+                arg['url-with-creds-and-uid'],
+                lambda url : requests.get(url, headers=head),
+                lambda rsp : json.loads(rsp.text),
+                lambda obj : obj['dashboard']['panels'],
+                lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
+            )
 
-        urls = args.url.split()
+        def get_panels_from_url(arg):
+            def add_panel_into_arguments(acc, panels):
+                (url, args) = arg['input']
 
-        functools.reduce(
-            comp(
-                bld_url_with_creds_and_db_uid,
-                mapping(logging.info),
-            )(lambda acc,res: acc),
-            zip(urls,itertools.repeat(arguments)),
-            []
-        )
+                def edit_arguments_then_send_into_queue(panel):
+                    args['panel'] = panel
+                    acc.put(args)
 
-        # fold_if_true_and_apply(
-        #     [url_with_creds_and_db_uid],
-        #     lambda url    : requests.get(url, headers=head),
-        #     lambda rsp    : json.loads(rsp.text),
-        #     lambda obj    : obj['dashboard']['panels'],
-        #     lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
-        #     lambda panels : os.mkdir(arguments['fold']) or panels,
-        #     lambda panels : [get_image(panel, arguments) for panel in panels]
-        # )
+                [edit_arguments_then_send_into_queue(panel)
+                 for panel in panels]
+            
+            functools.reduce(
+                comp(
+                    bld_url_with_creds_and_db_uid,
+                    retrieve_ids_and_titles_of_panels,
+                )(add_panel_into_arguments),
+                [arg['input']],
+                arg['queue']
+            )
+
+        with multiprocessing.Manager():
+            panels    = multiprocessing.Manager().Queue()
+            arguments = {
+                'fold' : args.output_folder,
+                'prfx' : args.output_prefix,
+                'cred' : args.user_credentials
+            }
+
+            exec_proc_with_args({
+                'func'  : get_panels_from_url,
+                'queue' : panels,
+                'args'  : [{'input':(url,arguments),'queue':panels}
+                           for url in args.url.split()]
+            })
+
+            try:
+                os.mkdir(args.output_folder)
+            finally:
+                logging.debug('{} exists'.format(args.output_folder))
+
+            exec_proc_with_args({
+                'func'  : get_image,
+                'args'  : [panel for panel in iter(panels.get, None)]
+            })
 
     elif args.search_panels and (args.time_interval or args.time_range):
 
