@@ -141,8 +141,9 @@ if __name__ =="__main__":
             return proc
 
         def aggregate_results(acc,res):
-            acc['results'].append(res)
-            acc['total']  = acc['total'] + 1
+            (rlt, count) = res
+            acc['results'].append(rlt)
+            acc['total']  = count
             return acc
 
         with multiprocessing.Manager() as mgr:
@@ -160,7 +161,8 @@ if __name__ =="__main__":
 
             pipe(
                 iter(results.get, None),
-                lambda res: functools.reduce(aggregate_results,res,
+                lambda res: functools.reduce(aggregate_results,
+                                             zip(res,itertools.count(1)),
                                              {'total':0,'results':[]}),
                 json.dumps,
                 logging.info
