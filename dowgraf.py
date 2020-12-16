@@ -12,6 +12,7 @@ import re
 import requests
 import string
 import sys
+import time
 
 logging.basicConfig(stream=sys.stdout, format='%(message)s', level=logging.INFO)
 
@@ -119,6 +120,7 @@ def exec_proc_with_args(args):
         )
 
     def run_worker(proc):
+        time.sleep(random.randrange(1,3))
         proc.start()
         return proc
 
