@@ -209,28 +209,31 @@ if __name__ =="__main__":
             )
 
         def get_panels_from_url(arg):
-            def add_panel_into_arguments(acc, panels):
+            def add_panels_as_images(folder, panels):
                 (url, args) = arg['input']
+                folder.wait()
 
-                def edit_arguments_then_send_into_queue(panel):
-                    args['panel'] = panel
-                    acc.put(args)
+                exec_proc_with_args({
+                    'func'  : get_image,
+                    'args'  : [{**args, 'panel':panel} for panel in panels]
+                })
 
-                [edit_arguments_then_send_into_queue(panel)
-                 for panel in panels]
-            
             functools.reduce(
                 comp(
                     bld_url_with_creds_and_db_uid,
                     retrieve_ids_and_titles_of_panels,
-                )(add_panel_into_arguments),
+                )(add_panels_as_images),
                 [arg['input']],
-                arg['queue']
+                arg['cond']
             )
 
         with multiprocessing.Manager():
-            panels    = multiprocessing.Manager().Queue()
-            arguments = {
+            panels     = multiprocessing.Manager().Barrier(
+                1,
+                action = os.mkdir(args.output_folder)
+            )
+
+            arguments  = {
                 'fold' : args.output_folder,
                 'prfx' : args.output_prefix,
                 'cred' : args.user_credentials
@@ -238,19 +241,8 @@ if __name__ =="__main__":
 
             exec_proc_with_args({
                 'func'  : get_panels_from_url,
-                'queue' : panels,
-                'args'  : [{'input':(url,arguments),'queue':panels}
+                'args'  : [{'input':(url,arguments),'cond':panels}
                            for url in args.url.split()]
-            })
-
-            try:
-                os.mkdir(args.output_folder)
-            finally:
-                logging.debug('{} exists'.format(args.output_folder))
-
-            exec_proc_with_args({
-                'func'  : get_image,
-                'args'  : [panel for panel in iter(panels.get, None)]
             })
 
     elif args.search_panels and (args.time_interval or args.time_range):
