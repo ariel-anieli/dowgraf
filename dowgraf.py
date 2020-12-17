@@ -76,7 +76,7 @@ def get_image(arg):
             '.'.join([rsp['nme'],rsp['tpe']])
         ]),'wb')
 
-    bld_file_details = lambda rsp: functools.reduce(
+    bld_file_details_then_write_image_to_file = lambda rsp: functools.reduce(
         lambda rsp, detail: {**rsp, detail['key']:detail['val'](rsp)},
         [{'key' : 'cnt',
           'val' : lambda rsp: rsp['rsp'].content
@@ -84,11 +84,17 @@ def get_image(arg):
          {'key' : 'tpe',
           'val' : lambda rsp: rsp['rsp'].headers['Content-Type'].split('/')[-1]
         },
-        {'key' : 'nme',
-         'val' : lambda rsp: re.sub('.DUT', arg['prfx'], arg['panel']['title'])
+         {'key' : 'nme',
+          'val' : lambda rsp: re.sub('.DUT', arg['prfx'], arg['panel']['title'])
         },
-        {'key' : 'fle',
-         'val' : open_file
+         {'key' : 'fle',
+          'val' : open_file
+        },
+         {'key' : 'written?',
+          'val' : lambda rsp: True if rsp['fle'].write(rsp['cnt']) else False
+         },
+         {'key' : 'closed?',
+          'val' : lambda rsp: rsp['fle'].close()
         }],
         rsp
     )
@@ -96,8 +102,7 @@ def get_image(arg):
     pipe(
         parameters,
         lambda params : {'rsp' : get_data_in_time_range(params)},
-        bld_file_details,
-        lambda rsp   : rsp['fle'].write(rsp['cnt']) and rsp['fle'].close(),
+        bld_file_details_then_write_image_to_file
     )
 
 def find_ids_and_titles(found, panel):
