@@ -70,14 +70,34 @@ def get_image(arg):
         params  = url_params
     )
 
+    open_file = lambda rsp: open(
+        '/'.join([
+            arg['fold'],
+            '.'.join([rsp['nme'],rsp['tpe']])
+        ]),'wb')
+
+    bld_file_details = lambda rsp: functools.reduce(
+        lambda rsp, detail: {**rsp, detail['key']:detail['val'](rsp)},
+        [{'key' : 'cnt',
+          'val' : lambda rsp: rsp['rsp'].content
+        },
+         {'key' : 'tpe',
+          'val' : lambda rsp: rsp['rsp'].headers['Content-Type'].split('/')[-1]
+        },
+        {'key' : 'nme',
+         'val' : lambda rsp: re.sub('.DUT', arg['prfx'], arg['panel']['title'])
+        },
+        {'key' : 'fle',
+         'val' : open_file
+        }],
+        rsp
+    )
+
     pipe(
         parameters,
         lambda params : {'rsp' : get_data_in_time_range(params)},
-        lambda _: _.update(cnt = _['rsp'].content) or _,
-        lambda _: _.update(tpe = _['rsp'].headers['Content-Type'].split('/')[-1]) or _,
-        lambda _: _.update(nme = re.sub('.DUT', arg['prfx'], arg['panel']['title'])) or _,
-        lambda _: _.update(fle = open(arg['fold'] + '/' + _['nme'] + '.' + _['tpe'], 'wb')) or _,
-        lambda _: _['fle'].write(_['cnt']) and _['fle'].close(),
+        bld_file_details,
+        lambda rsp   : rsp['fle'].write(rsp['cnt']) and rsp['fle'].close(),
     )
 
 def find_ids_and_titles(found, panel):
@@ -120,7 +140,7 @@ def exec_proc_with_args(args):
         )
 
     def run_worker(proc):
-        time.sleep(random.randrange(1,3))
+        time.sleep(random.uniform(1,2))
         proc.start()
         return proc
 
