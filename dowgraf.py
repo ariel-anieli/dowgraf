@@ -166,22 +166,22 @@ def extract_db_from_rsp(rsp):
 def append_to_acc(acc,res):
     acc.put(res)
 
-def fold(arg):
-    step       = arg.get('step', 64)
-    is_folding = lambda arg: len(arg['data'])>1
-    reducer    = lambda queue: lambda data: queue.put(
+def _reduce(arg):
+    step        = arg.get('step', 64)
+    is_reducing = lambda arg: len(arg['data'])>1
+    reduce      = lambda queue: lambda data: queue.put(
         functools.reduce(
             arg['func'],
             data,
             arg['null']))
 
-    def folder(arg, count):
+    def reducer(arg, count):
         if isinstance(arg['data'], list) and len(arg['data'])>step:
             queue = arg['mgr'].Queue()
             data  = [arg['data'][shift:shift+step]
                      for shift in range(0, len(arg['data']), step)]
-            exec_proc_with_args({
-                'func'  : reducer(queue),
+            _map({
+                'func'  : reduce(queue),
                 'queue' : queue,
                 'args'  : data})
             arg['data'] = [result for result in iter(queue.get,None)]
@@ -191,13 +191,13 @@ def fold(arg):
     
     return pipe(
         itertools.count(),
-        lambda runs  : itertools.accumulate(runs,func=folder,initial=arg),
-        lambda rslts : itertools.dropwhile(is_folding, rslts),
+        lambda runs  : itertools.accumulate(runs,func=reducer,initial=arg),
+        lambda rslts : itertools.dropwhile(is_reducing, rslts),
         lambda rslt  : itertools.islice(rslt, 1),
         lambda rslt  : list(rslt).pop()['data']
     )
 
-def exec_proc_with_args(args):
+def _map(args):
     def start_worker(arg):
         return multiprocessing.Process(
             target = args['func'],
@@ -251,7 +251,7 @@ if __name__ =="__main__":
         with multiprocessing.Manager() as manager:
             results = manager.Queue()
 
-            exec_proc_with_args({
+            _map({
                 'func'  : qry_dashboard_with_key,
                 'queue' : results,
                 'args'  : [{'key':key,'queue':results}
@@ -259,7 +259,7 @@ if __name__ =="__main__":
             })
 
             pipe(
-                fold({
+                _reduce({
                     'func' : aggregate_results,
                     'null' : {'total':0,'results':[]},
                     'mgr'  : manager,
@@ -276,9 +276,9 @@ if __name__ =="__main__":
                 (url, args) = arg['input']
                 folder.wait()
 
-                exec_proc_with_args({
-                    'func'  : get_image,
-                    'args'  : [{**args, 'panel':panel} for panel in panels]
+                _map({
+                    'func' : get_image,
+                    'args' : [{**args, 'panel':panel} for panel in panels]
                 })
 
             functools.reduce(
@@ -302,10 +302,10 @@ if __name__ =="__main__":
                 'cred' : args.user_credentials
             }
 
-            exec_proc_with_args({
-                'func'  : get_panels_from_url,
-                'args'  : [{'input':(url,arguments),'cond':panels}
-                           for url in args.url.split()]
+            _map({
+                'func' : get_panels_from_url,
+                'args' : [{'input':(url,arguments),'cond':panels}
+                          for url in args.url.split()]
             })
 
     elif args.search_panels and (args.time_interval or args.time_range):
