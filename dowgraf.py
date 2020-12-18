@@ -118,6 +118,35 @@ def find_ids_and_titles(found, panel):
     return found
 
 @mapping
+def bld_url_with_creds_and_db_uid(args):
+    (url, arg) = args
+
+    arg['url-with-creds-and-uid'] = functools.reduce(
+        lambda string, pattern: re.sub(pattern[0], pattern[1], string),
+        [('(?<=//)'      , arg['cred'] + '@'),
+         ('\?.*$'        , ''),
+         ('/[^/]+$'      , ''),
+         ('(?<=/)d(?=/)' , 'api/dashboards/uid')],
+        url
+    )
+
+    arg['base']       = re.sub('/api.*', '', arg['url-with-creds-and-uid'])
+    arg['parameters'] = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', url)
+    arg['uid']        = re.findall('(?<=/d/)[^/]+(?=/)', url).pop()
+
+    return arg
+
+@mapping
+def retrieve_ids_and_titles_of_panels(arg):
+    return pipe(
+        arg['url-with-creds-and-uid'],
+        lambda url : requests.get(url, headers=head),
+        lambda rsp : json.loads(rsp.text),
+        lambda obj : obj['dashboard']['panels'],
+        lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
+    )
+
+@mapping
 def search_into_db_with_keyword(key):
     return {
         'key' : key,
@@ -136,6 +165,37 @@ def extract_db_from_rsp(rsp):
 
 def append_to_acc(acc,res):
     acc.put(res)
+
+def fold(arg):
+    step       = arg.get('step', 64)
+    is_folding = lambda arg: len(arg['data'])>1
+    reducer    = lambda queue: lambda data: queue.put(
+        functools.reduce(
+            arg['func'],
+            data,
+            arg['null']))
+
+    def folder(arg, count):
+        if isinstance(arg['data'], list) and len(arg['data'])>step:
+            queue = arg['mgr'].Queue()
+            data  = [arg['data'][shift:shift+step]
+                     for shift in range(0, len(arg['data']), step)]
+            exec_proc_with_args({
+                'func'  : reducer(queue),
+                'queue' : queue,
+                'args'  : data})
+            arg['data'] = [result for result in iter(queue.get,None)]
+        else:
+            arg['data'] = [functools.reduce(arg['func'],arg['data'],arg['null'])]
+        return arg
+    
+    return pipe(
+        itertools.count(),
+        lambda runs  : itertools.accumulate(runs,func=folder,initial=arg),
+        lambda rslts : itertools.dropwhile(is_folding, rslts),
+        lambda rslt  : itertools.islice(rslt, 1),
+        lambda rslt  : list(rslt).pop()['data']
+    )
 
 def exec_proc_with_args(args):
     def start_worker(arg):
@@ -178,15 +238,18 @@ if __name__ =="__main__":
                 arg['queue']
             )
 
-        def aggregate_results(acc,res):
-            (rlt, count) = res
-            acc['results'].append(rlt)
-            acc['total']  = count
+        def aggregate_results(acc,rlts):
+            if 'results' not in rlts:
+                acc['results'].append(rlts)
+                acc['total']  = acc['total'] + 1
+            else:
+                acc['total']  = acc['total'] + rlts['total']
+                [acc['results'].append(rlt) for rlt in rlts['results']]
+
             return acc
 
-        with multiprocessing.Manager():
-            results = multiprocessing.Manager().Queue()
-            init    = {'total':0,'results':[]}
+        with multiprocessing.Manager() as manager:
+            results = manager.Queue()
 
             exec_proc_with_args({
                 'func'  : qry_dashboard_with_key,
@@ -196,42 +259,17 @@ if __name__ =="__main__":
             })
 
             pipe(
-                zip(iter(results.get, None),itertools.count(1)),
-                lambda res: functools.reduce(aggregate_results, res, init),
+                fold({
+                    'func' : aggregate_results,
+                    'null' : {'total':0,'results':[]},
+                    'mgr'  : manager,
+                    'data' : [rslt for rslt in iter(results.get, None)]
+                }),
                 json.dumps,
                 logging.info
-            )            
+            )
 
     elif args.url:
-
-        @mapping
-        def bld_url_with_creds_and_db_uid(args):
-            (url, arg) = args
-
-            arg['url-with-creds-and-uid'] = functools.reduce(
-                lambda string, pattern: re.sub(pattern[0], pattern[1], string),
-                [('(?<=//)'      , arg['cred'] + '@'),
-                 ('\?.*$'        , ''),
-                 ('/[^/]+$'      , ''),
-                 ('(?<=/)d(?=/)' , 'api/dashboards/uid')],
-                url
-            )
-
-            arg['base']       = re.sub('/api.*', '', arg['url-with-creds-and-uid'])
-            arg['parameters'] = re.findall('(?<=&|\?)([^=]+)=([^&]+)(?=&|$)', url)
-            arg['uid']        = re.findall('(?<=/d/)[^/]+(?=/)', url).pop()
-
-            return arg
-
-        @mapping
-        def retrieve_ids_and_titles_of_panels(arg):
-            return pipe(
-                arg['url-with-creds-and-uid'],
-                lambda url : requests.get(url, headers=head),
-                lambda rsp : json.loads(rsp.text),
-                lambda obj : obj['dashboard']['panels'],
-                lambda panels : functools.reduce(find_ids_and_titles, panels,[]),
-            )
 
         def get_panels_from_url(arg):
             def add_panels_as_images(folder, panels):
